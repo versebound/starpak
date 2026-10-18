@@ -246,3 +246,145 @@ fn truncated_copy_reports_truncation() {
         other => panic!("expected Truncated, got {:?}", other.map(|a| a.len())),
     }
 }
+
+// ───────────────────────── DataForge ─────────────────────────
+
+#[test]
+fn dataforge_loads_from_archive() {
+    real!(a);
+    let t = std::time::Instant::now();
+    let df = starpak::dataforge::DataForge::from_archive(&a).unwrap();
+    eprintln!("loaded Game2.dcb in {:.2?}", t.elapsed());
+    let info = df.info();
+    assert!(matches!(info.version, 5 | 6 | 8), "{}", info.version);
+    assert!(info.records > 50_000, "{}", info.records);
+    assert!(info.structs > 1000);
+    assert!(info.enums > 100);
+    assert!(df.file_count() > 10_000);
+    fn assert_send_sync<T: Send + Sync>(_: &T) {}
+    assert_send_sync(&df);
+}
+
+#[test]
+fn dataforge_decodes_every_record() {
+    real!(a);
+    let df = starpak::dataforge::DataForge::from_archive(&a).unwrap();
+    fn walk(inst: &starpak::dataforge::Instance<'_>, depth: usize, n: &mut u64) {
+        for f in inst.fields() {
+            let v = f
+                .value()
+                .unwrap_or_else(|e| panic!("{}.{}: {e}", inst.type_name(), f.name()));
+            *n += 1;
+            match v {
+                starpak::dataforge::Value::Class(i) => walk(&i, depth, n),
+                starpak::dataforge::Value::StrongPointer(Some(p)) if depth < 64 => {
+                    if let Some(i) = inst.database().deref(Some(p)).unwrap() {
+                        walk(&i, depth + 1, n);
+                    }
+                }
+                starpak::dataforge::Value::Array(arr) => {
+                    for item in arr.iter() {
+                        match item.unwrap() {
+                            starpak::dataforge::Value::Class(i) => walk(&i, depth, n),
+                            starpak::dataforge::Value::StrongPointer(Some(p)) if depth < 64 => {
+                                if let Some(i) = inst.database().deref(Some(p)).unwrap() {
+                                    walk(&i, depth + 1, n);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut values = 0u64;
+    for r in df.records() {
+        let inst = r.instance().unwrap_or_else(|e| panic!("{}: {e}", r.name()));
+        walk(&inst, 0, &mut values);
+        assert!(!r.guid().is_nil());
+        assert!(!r.name().is_empty());
+        assert!(r.file_name().starts_with("libs/") || !r.file_name().is_empty());
+    }
+    assert!(values > 1_000_000, "{values}");
+}
+
+#[test]
+fn dataforge_spot_checks() {
+    use starpak::dataforge::Value;
+    real!(a);
+    let df = starpak::dataforge::DataForge::from_archive(&a).unwrap();
+
+    // A ship entity.
+    let ship = df
+        .record_by_path("libs/foundry/records/entities/spaceships/aegs_avenger_titan.xml")
+        .expect("Avenger Titan record");
+    assert_eq!(ship.type_name(), "EntityClassDefinition");
+    assert!(ship.name().ends_with("AEGS_Avenger_Titan"));
+    assert!(ship.is_main());
+    assert_eq!(df.record_by_guid(ship.guid()).unwrap().id(), ship.id());
+    assert_eq!(
+        df.record_by_path("LIBS\\FOUNDRY\\RECORDS\\ENTITIES\\SPACESHIPS\\AEGS_AVENGER_TITAN.XML")
+            .map(|r| r.id()),
+        Some(ship.id())
+    );
+    let inst = ship.instance().unwrap();
+    let comps = inst
+        .get("Components")
+        .unwrap()
+        .as_array()
+        .expect("Components array");
+    assert!(comps.len() > 10);
+    let mut types = Vec::new();
+    for c in comps.iter() {
+        if let Value::StrongPointer(Some(p)) = c.unwrap() {
+            let i = df.deref(Some(p)).unwrap().unwrap();
+            types.push(i.type_name().to_string());
+        }
+    }
+    assert!(types.iter().any(|t| t.contains("Vehicle")), "{types:?}");
+    let xml = ship.to_xml().unwrap();
+    assert!(xml.starts_with("<EntityClassDefinition.AEGS_Avenger_Titan "));
+    assert!(xml.contains("__type=\"EntityClassDefinition\""));
+    assert!(
+        xml.contains("__ref=\"")
+            && xml.contains(
+                "__path=\"libs/foundry/records/entities/spaceships/aegs_avenger_titan.xml\""
+            )
+    );
+    assert!(xml.contains("__polymorphicType=\""));
+    let json = ship.to_json().unwrap();
+    assert!(json.starts_with("{\n  \"__name\": \"EntityClassDefinition.AEGS_Avenger_Titan\""));
+
+    // Records by type include subtypes; a crafting record exists.
+    let entities = df.records_of_type("EntityClassDefinition").count();
+    assert!(entities > 1000, "{entities}");
+    let crafting = df
+        .records_matching("libs/foundry/records/crafting/**")
+        .unwrap()
+        .count();
+    assert!(crafting > 10, "{crafting}");
+    let params =
+        df.record_by_path("libs/foundry/records/crafting/globalparams/craftingglobalparams.xml");
+    if let Some(p) = params {
+        assert_eq!(p.type_name(), "CraftingGlobalParams");
+        let _ = p.to_xml().unwrap();
+    }
+
+    // Files holding many records keep them all addressable.
+    let tags = df.records_in_file("libs/foundry/records/tagdatabase/tagdatabase.tagdatabase.xml");
+    assert!(tags.len() > 100, "{}", tags.len());
+    let main = df
+        .record_by_path("libs/foundry/records/tagdatabase/tagdatabase.tagdatabase.xml")
+        .unwrap();
+    assert_ne!(main.type_name(), "Tag");
+
+    // Struct inheritance and enums are navigable.
+    let s = df.find_struct("EntityClassDefinition").unwrap();
+    assert!(s.property_count() > 3);
+    assert!(df.enums().any(|e| e.len() > 2));
+    if df.version() >= 8 {
+        assert!(df.records().any(|r| !r.tag().is_empty()));
+    }
+}

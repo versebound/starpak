@@ -529,3 +529,625 @@ pub fn encode_cryxml(root: &Elem, layout: CryXmlLayout) -> Vec<u8> {
     out.extend_from_slice(&body);
     out
 }
+
+// ───────────────────────── DataForge fixtures ─────────────────────────
+
+/// Raw DataForge type codes.
+pub mod dt {
+    pub const BOOL: u16 = 0x01;
+    pub const I8: u16 = 0x02;
+    pub const I16: u16 = 0x03;
+    pub const I32: u16 = 0x04;
+    pub const I64: u16 = 0x05;
+    pub const U8: u16 = 0x06;
+    pub const U16: u16 = 0x07;
+    pub const U32: u16 = 0x08;
+    pub const U64: u16 = 0x09;
+    pub const STRING: u16 = 0x0A;
+    pub const F32: u16 = 0x0B;
+    pub const F64: u16 = 0x0C;
+    pub const LOCALE: u16 = 0x0D;
+    pub const GUID: u16 = 0x0E;
+    pub const ENUM: u16 = 0x0F;
+    pub const CLASS: u16 = 0x10;
+    pub const STRONG: u16 = 0x110;
+    pub const WEAK: u16 = 0x210;
+    pub const REFERENCE: u16 = 0x310;
+}
+
+/// Property declaration for the fixture builder.
+#[derive(Clone)]
+pub struct DcbProp {
+    pub name: String,
+    pub ty: u16,
+    /// 0 = attribute, 1 = complex array, 2 = simple array, 3 = class array.
+    pub conv: u16,
+    /// Struct or enum index for class/pointer/reference/enum properties.
+    pub target: u16,
+}
+
+impl DcbProp {
+    pub fn attr(name: &str, ty: u16) -> DcbProp {
+        DcbProp {
+            name: name.into(),
+            ty,
+            conv: 0,
+            target: 0,
+        }
+    }
+
+    pub fn attr_of(name: &str, ty: u16, target: usize) -> DcbProp {
+        DcbProp {
+            name: name.into(),
+            ty,
+            conv: 0,
+            target: target as u16,
+        }
+    }
+
+    pub fn array(name: &str, ty: u16) -> DcbProp {
+        DcbProp {
+            name: name.into(),
+            ty,
+            conv: 2,
+            target: 0,
+        }
+    }
+
+    pub fn array_of(name: &str, ty: u16, target: usize) -> DcbProp {
+        DcbProp {
+            name: name.into(),
+            ty,
+            conv: if ty == dt::CLASS { 3 } else { 1 },
+            target: target as u16,
+        }
+    }
+}
+
+/// A value for one property of an instance.
+#[derive(Clone, Debug)]
+pub enum V {
+    Bool(bool),
+    I8(i8),
+    I16(i16),
+    I32(i32),
+    I64(i64),
+    U8(u8),
+    U16(u16),
+    U32(u32),
+    U64(u64),
+    F32(f32),
+    F64(f64),
+    Str(String),
+    Loc(String),
+    Enum(String),
+    Guid([u8; 16]),
+    /// Inline class: values of the nested struct in flattened property order.
+    Class(Vec<V>),
+    /// Strong pointer to `(struct, instance)`; `None` for null.
+    Strong(Option<(usize, usize)>),
+    /// Weak pointer to `(struct, instance)`; `None` for null.
+    Weak(Option<(usize, usize)>),
+    /// Reference `(guid, instance)`; `None` for null.
+    Ref(Option<([u8; 16], i32)>),
+    /// Array of scalar/pointer/reference values.
+    Array(Vec<V>),
+    /// Class array: `count` consecutive instances of the property's struct
+    /// starting at `first`.
+    ClassArray(usize, usize),
+}
+
+pub struct DcbStruct {
+    pub name: String,
+    pub parent: Option<usize>,
+    pub props: Vec<DcbProp>,
+}
+
+pub struct DcbRecord {
+    pub name: String,
+    pub file: String,
+    pub tag: Option<String>,
+    pub struct_index: usize,
+    pub instance: usize,
+    pub guid: [u8; 16],
+}
+
+/// Builds a `.dcb` byte image.
+pub struct DcbBuilder {
+    pub version: u32,
+    pub structs: Vec<DcbStruct>,
+    pub enums: Vec<(String, Vec<String>)>,
+    pub instances: Vec<Vec<Vec<V>>>,
+    pub records: Vec<DcbRecord>,
+    /// Emit data mappings in reverse struct order.
+    pub reverse_mappings: bool,
+}
+
+#[derive(Default)]
+struct Tables {
+    i8: Vec<u8>,
+    i16: Vec<u8>,
+    i32: Vec<u8>,
+    i64: Vec<u8>,
+    u8: Vec<u8>,
+    u16: Vec<u8>,
+    u32: Vec<u8>,
+    u64: Vec<u8>,
+    bool: Vec<u8>,
+    f32: Vec<u8>,
+    f64: Vec<u8>,
+    guid: Vec<u8>,
+    string: Vec<u8>,
+    locale: Vec<u8>,
+    enum_: Vec<u8>,
+    strong: Vec<u8>,
+    weak: Vec<u8>,
+    reference: Vec<u8>,
+}
+
+struct Strings {
+    bytes: Vec<u8>,
+    map: std::collections::HashMap<String, u32>,
+}
+
+impl Strings {
+    fn new() -> Strings {
+        Strings {
+            bytes: Vec::new(),
+            map: std::collections::HashMap::new(),
+        }
+    }
+
+    fn add(&mut self, s: &str) -> u32 {
+        if let Some(&o) = self.map.get(s) {
+            return o;
+        }
+        let o = self.bytes.len() as u32;
+        self.bytes.extend_from_slice(s.as_bytes());
+        self.bytes.push(0);
+        self.map.insert(s.to_string(), o);
+        o
+    }
+}
+
+impl DcbBuilder {
+    pub fn new(version: u32) -> DcbBuilder {
+        DcbBuilder {
+            version,
+            structs: Vec::new(),
+            enums: Vec::new(),
+            instances: Vec::new(),
+            records: Vec::new(),
+            reverse_mappings: false,
+        }
+    }
+
+    pub fn struct_def(&mut self, name: &str, parent: Option<usize>, props: Vec<DcbProp>) -> usize {
+        self.structs.push(DcbStruct {
+            name: name.into(),
+            parent,
+            props,
+        });
+        self.instances.push(Vec::new());
+        self.structs.len() - 1
+    }
+
+    pub fn enum_def(&mut self, name: &str, values: &[&str]) -> usize {
+        self.enums
+            .push((name.into(), values.iter().map(|s| s.to_string()).collect()));
+        self.enums.len() - 1
+    }
+
+    /// Adds an instance and returns its index.
+    pub fn instance(&mut self, struct_index: usize, values: Vec<V>) -> usize {
+        self.instances[struct_index].push(values);
+        self.instances[struct_index].len() - 1
+    }
+
+    pub fn record(
+        &mut self,
+        name: &str,
+        file: &str,
+        struct_index: usize,
+        instance: usize,
+        guid: [u8; 16],
+    ) -> &mut Self {
+        self.records.push(DcbRecord {
+            name: name.into(),
+            file: file.into(),
+            tag: None,
+            struct_index,
+            instance,
+            guid,
+        });
+        self
+    }
+
+    pub fn record_tagged(
+        &mut self,
+        name: &str,
+        file: &str,
+        tag: &str,
+        struct_index: usize,
+        instance: usize,
+        guid: [u8; 16],
+    ) -> &mut Self {
+        self.record(name, file, struct_index, instance, guid);
+        self.records.last_mut().unwrap().tag = Some(tag.into());
+        self
+    }
+
+    fn flat_props(&self, si: usize) -> Vec<DcbProp> {
+        let mut chain = Vec::new();
+        let mut cur = Some(si);
+        while let Some(s) = cur {
+            chain.push(s);
+            cur = self.structs[s].parent;
+        }
+        let mut out = Vec::new();
+        for &s in chain.iter().rev() {
+            out.extend(self.structs[s].props.iter().cloned());
+        }
+        out
+    }
+
+    fn struct_size(&self, si: usize) -> u32 {
+        self.flat_props(si)
+            .iter()
+            .map(|p| {
+                if p.conv != 0 {
+                    8
+                } else if p.ty == dt::CLASS {
+                    self.struct_size(p.target as usize)
+                } else {
+                    scalar_size(p.ty)
+                }
+            })
+            .sum()
+    }
+
+    fn write_values(
+        &self,
+        props: &[DcbProp],
+        values: &[V],
+        out: &mut Vec<u8>,
+        t: &mut Tables,
+        text: &mut Strings,
+    ) {
+        assert_eq!(
+            props.len(),
+            values.len(),
+            "value count must match property count"
+        );
+        for (p, v) in props.iter().zip(values) {
+            if p.conv != 0 {
+                let (first, count) = match v {
+                    V::ClassArray(first, count) => (*first as i32, *count as i32),
+                    V::Array(items) => {
+                        let first = table_len(t, p.ty);
+                        for item in items {
+                            write_table_value(p.ty, item, t, text);
+                        }
+                        (first as i32, items.len() as i32)
+                    }
+                    other => panic!(
+                        "array property {} needs an array value, got {other:?}",
+                        p.name
+                    ),
+                };
+                out.extend_from_slice(&count.to_le_bytes());
+                out.extend_from_slice(&first.to_le_bytes());
+                continue;
+            }
+            match (p.ty, v) {
+                (dt::CLASS, V::Class(inner)) => {
+                    let inner_props = self.flat_props(p.target as usize);
+                    self.write_values(&inner_props, inner, out, t, text);
+                }
+                (dt::CLASS, other) => {
+                    panic!("class property {} needs V::Class, got {other:?}", p.name)
+                }
+                _ => write_scalar(p.ty, v, out, text),
+            }
+        }
+    }
+
+    pub fn build(&self) -> Vec<u8> {
+        let mut text = Strings::new();
+        let mut names = Strings::new();
+        let two_tables = self.version >= 6;
+        let mut t = Tables::default();
+
+        // Struct / property / enum tables.
+        let mut struct_bytes = Vec::new();
+        let mut prop_bytes = Vec::new();
+        let mut first_attr = 0u16;
+        for s in &self.structs {
+            let name_off = if two_tables {
+                names.add(&s.name)
+            } else {
+                text.add(&s.name)
+            };
+            struct_bytes.extend_from_slice(&name_off.to_le_bytes());
+            struct_bytes.extend_from_slice(&s.parent.map(|p| p as i32).unwrap_or(-1).to_le_bytes());
+            struct_bytes.extend_from_slice(&(s.props.len() as u16).to_le_bytes());
+            struct_bytes.extend_from_slice(&first_attr.to_le_bytes());
+            struct_bytes.extend_from_slice(
+                &self
+                    .struct_size(
+                        self.structs
+                            .iter()
+                            .position(|x| std::ptr::eq(x, s))
+                            .unwrap(),
+                    )
+                    .to_le_bytes(),
+            );
+            for p in &s.props {
+                let n = if two_tables {
+                    names.add(&p.name)
+                } else {
+                    text.add(&p.name)
+                };
+                prop_bytes.extend_from_slice(&n.to_le_bytes());
+                prop_bytes.extend_from_slice(&p.target.to_le_bytes());
+                prop_bytes.extend_from_slice(&p.ty.to_le_bytes());
+                prop_bytes.extend_from_slice(&p.conv.to_le_bytes());
+                prop_bytes.extend_from_slice(&0u16.to_le_bytes());
+                first_attr += 1;
+            }
+        }
+        let mut enum_bytes = Vec::new();
+        let mut enum_opt_bytes = Vec::new();
+        let mut first_val = 0u16;
+        for (name, values) in &self.enums {
+            let n = if two_tables {
+                names.add(name)
+            } else {
+                text.add(name)
+            };
+            enum_bytes.extend_from_slice(&n.to_le_bytes());
+            enum_bytes.extend_from_slice(&(values.len() as u16).to_le_bytes());
+            enum_bytes.extend_from_slice(&first_val.to_le_bytes());
+            for v in values {
+                let o = if two_tables {
+                    names.add(v)
+                } else {
+                    text.add(v)
+                };
+                enum_opt_bytes.extend_from_slice(&o.to_le_bytes());
+                first_val += 1;
+            }
+        }
+
+        // Instances (in mapping order) and mappings.
+        let order: Vec<usize> = if self.reverse_mappings {
+            (0..self.structs.len()).rev().collect()
+        } else {
+            (0..self.structs.len()).collect()
+        };
+        let mut mapping_bytes = Vec::new();
+        let mut data = Vec::new();
+        for &si in &order {
+            let insts = &self.instances[si];
+            if insts.is_empty() {
+                continue;
+            }
+            mapping_bytes.extend_from_slice(&(insts.len() as u32).to_le_bytes());
+            mapping_bytes.extend_from_slice(&(si as i32).to_le_bytes());
+            let props = self.flat_props(si);
+            for values in insts {
+                let before = data.len();
+                self.write_values(&props, values, &mut data, &mut t, &mut text);
+                assert_eq!(
+                    (data.len() - before) as u32,
+                    self.struct_size(si),
+                    "instance size for struct {si}"
+                );
+            }
+        }
+
+        // Records.
+        let mut record_bytes = Vec::new();
+        for r in &self.records {
+            let n = if two_tables {
+                names.add(&r.name)
+            } else {
+                text.add(&r.name)
+            };
+            record_bytes.extend_from_slice(&n.to_le_bytes());
+            record_bytes.extend_from_slice(&text.add(&r.file).to_le_bytes());
+            if self.version >= 8 {
+                let tag = match &r.tag {
+                    Some(t) => names.add(t),
+                    None => u32::MAX,
+                };
+                record_bytes.extend_from_slice(&tag.to_le_bytes());
+            }
+            record_bytes.extend_from_slice(&(r.struct_index as i32).to_le_bytes());
+            record_bytes.extend_from_slice(&r.guid);
+            record_bytes.extend_from_slice(&(r.instance as u16).to_le_bytes());
+            record_bytes
+                .extend_from_slice(&(self.struct_size(r.struct_index) as u16).to_le_bytes());
+        }
+
+        let mut out = Vec::new();
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&self.version.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        let mapping_count = mapping_bytes.len() / 8;
+        let counts: [usize; 24] = [
+            self.structs.len(),
+            prop_bytes.len() / 12,
+            self.enums.len(),
+            mapping_count,
+            self.records.len(),
+            t.bool.len(),
+            t.i8.len(),
+            t.i16.len() / 2,
+            t.i32.len() / 4,
+            t.i64.len() / 8,
+            t.u8.len(),
+            t.u16.len() / 2,
+            t.u32.len() / 4,
+            t.u64.len() / 8,
+            t.f32.len() / 4,
+            t.f64.len() / 8,
+            t.guid.len() / 16,
+            t.string.len() / 4,
+            t.locale.len() / 4,
+            t.enum_.len() / 4,
+            t.strong.len() / 8,
+            t.weak.len() / 8,
+            t.reference.len() / 20,
+            enum_opt_bytes.len() / 4,
+        ];
+        for c in counts {
+            out.extend_from_slice(&(c as u32).to_le_bytes());
+        }
+        let (text1, text2) = if two_tables {
+            (text.bytes, names.bytes)
+        } else {
+            (text.bytes, Vec::new())
+        };
+        out.extend_from_slice(&(text1.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(text2.len() as u32).to_le_bytes());
+        out.extend_from_slice(&struct_bytes);
+        out.extend_from_slice(&prop_bytes);
+        out.extend_from_slice(&enum_bytes);
+        out.extend_from_slice(&mapping_bytes);
+        out.extend_from_slice(&record_bytes);
+        for tb in [
+            &t.i8,
+            &t.i16,
+            &t.i32,
+            &t.i64,
+            &t.u8,
+            &t.u16,
+            &t.u32,
+            &t.u64,
+            &t.bool,
+            &t.f32,
+            &t.f64,
+            &t.guid,
+            &t.string,
+            &t.locale,
+            &t.enum_,
+            &t.strong,
+            &t.weak,
+            &t.reference,
+        ] {
+            out.extend_from_slice(tb);
+        }
+        out.extend_from_slice(&enum_opt_bytes);
+        out.extend_from_slice(&text1);
+        out.extend_from_slice(&text2);
+        out.extend_from_slice(&data);
+        out
+    }
+}
+
+fn scalar_size(ty: u16) -> u32 {
+    match ty {
+        dt::BOOL | dt::I8 | dt::U8 => 1,
+        dt::I16 | dt::U16 => 2,
+        dt::I32 | dt::U32 | dt::F32 | dt::STRING | dt::LOCALE | dt::ENUM => 4,
+        dt::I64 | dt::U64 | dt::F64 | dt::STRONG | dt::WEAK => 8,
+        dt::GUID => 16,
+        dt::REFERENCE => 20,
+        other => panic!("no scalar size for type {other:#x}"),
+    }
+}
+
+fn table_len(t: &Tables, ty: u16) -> usize {
+    match ty {
+        dt::BOOL => t.bool.len(),
+        dt::I8 => t.i8.len(),
+        dt::U8 => t.u8.len(),
+        dt::I16 => t.i16.len() / 2,
+        dt::U16 => t.u16.len() / 2,
+        dt::I32 => t.i32.len() / 4,
+        dt::U32 => t.u32.len() / 4,
+        dt::F32 => t.f32.len() / 4,
+        dt::I64 => t.i64.len() / 8,
+        dt::U64 => t.u64.len() / 8,
+        dt::F64 => t.f64.len() / 8,
+        dt::GUID => t.guid.len() / 16,
+        dt::STRING => t.string.len() / 4,
+        dt::LOCALE => t.locale.len() / 4,
+        dt::ENUM => t.enum_.len() / 4,
+        dt::STRONG => t.strong.len() / 8,
+        dt::WEAK => t.weak.len() / 8,
+        dt::REFERENCE => t.reference.len() / 20,
+        other => panic!("no table for type {other:#x}"),
+    }
+}
+
+fn write_table_value(ty: u16, v: &V, t: &mut Tables, text: &mut Strings) {
+    let buf = match ty {
+        dt::BOOL => &mut t.bool,
+        dt::I8 => &mut t.i8,
+        dt::U8 => &mut t.u8,
+        dt::I16 => &mut t.i16,
+        dt::U16 => &mut t.u16,
+        dt::I32 => &mut t.i32,
+        dt::U32 => &mut t.u32,
+        dt::F32 => &mut t.f32,
+        dt::I64 => &mut t.i64,
+        dt::U64 => &mut t.u64,
+        dt::F64 => &mut t.f64,
+        dt::GUID => &mut t.guid,
+        dt::STRING => &mut t.string,
+        dt::LOCALE => &mut t.locale,
+        dt::ENUM => &mut t.enum_,
+        dt::STRONG => &mut t.strong,
+        dt::WEAK => &mut t.weak,
+        dt::REFERENCE => &mut t.reference,
+        other => panic!("no table for type {other:#x}"),
+    };
+    write_scalar(ty, v, buf, text);
+}
+
+fn write_scalar(ty: u16, v: &V, out: &mut Vec<u8>, text: &mut Strings) {
+    match (ty, v) {
+        (dt::BOOL, V::Bool(b)) => out.push(*b as u8),
+        (dt::I8, V::I8(x)) => out.push(*x as u8),
+        (dt::U8, V::U8(x)) => out.push(*x),
+        (dt::I16, V::I16(x)) => out.extend_from_slice(&x.to_le_bytes()),
+        (dt::U16, V::U16(x)) => out.extend_from_slice(&x.to_le_bytes()),
+        (dt::I32, V::I32(x)) => out.extend_from_slice(&x.to_le_bytes()),
+        (dt::U32, V::U32(x)) => out.extend_from_slice(&x.to_le_bytes()),
+        (dt::I64, V::I64(x)) => out.extend_from_slice(&x.to_le_bytes()),
+        (dt::U64, V::U64(x)) => out.extend_from_slice(&x.to_le_bytes()),
+        (dt::F32, V::F32(x)) => out.extend_from_slice(&x.to_le_bytes()),
+        (dt::F64, V::F64(x)) => out.extend_from_slice(&x.to_le_bytes()),
+        (dt::STRING, V::Str(s)) | (dt::LOCALE, V::Loc(s)) | (dt::ENUM, V::Enum(s)) => {
+            out.extend_from_slice(&text.add(s).to_le_bytes())
+        }
+        (dt::GUID, V::Guid(g)) => out.extend_from_slice(g),
+        (dt::STRONG, V::Strong(p)) | (dt::WEAK, V::Weak(p)) => {
+            let (s, i) = p.map(|(s, i)| (s as i32, i as i32)).unwrap_or((-1, -1));
+            out.extend_from_slice(&s.to_le_bytes());
+            out.extend_from_slice(&i.to_le_bytes());
+        }
+        (dt::REFERENCE, V::Ref(r)) => match r {
+            Some((g, i)) => {
+                out.extend_from_slice(&i.to_le_bytes());
+                out.extend_from_slice(g);
+            }
+            None => {
+                out.extend_from_slice(&(-1i32).to_le_bytes());
+                out.extend_from_slice(&[0u8; 16]);
+            }
+        },
+        (ty, v) => panic!("value {v:?} does not match type {ty:#x}"),
+    }
+}
+
+/// GUID bytes for a small integer, readable in dumps.
+pub fn guid(n: u8) -> [u8; 16] {
+    let mut g = [0u8; 16];
+    g[0] = n;
+    g[15] = 0xAA;
+    g
+}
