@@ -13,8 +13,15 @@ use std::time::Instant;
 use clap::{Args, Parser, Subcommand};
 use starpak::{Archive, DirId, Entry, EntryId};
 
+/// Release builds pass the tag version in `STARPAK_VERSION`; plain cargo
+/// builds fall back to the crate version.
+const VERSION: &str = match option_env!("STARPAK_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 #[derive(Parser)]
-#[command(name = "starpak", version, about = "Star Citizen Data.p4k reader")]
+#[command(name = "starpak", version = VERSION, about = "Star Citizen Data.p4k reader")]
 pub(crate) struct Cli {
     /// Path to Data.p4k (or set STARPAK_P4K).
     #[arg(short = 'p', long = "p4k", global = true, env = "STARPAK_P4K")]

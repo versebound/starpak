@@ -3,14 +3,14 @@ resolver = "2"
 members = ["crates/starpak", "crates/starpak-cli"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.0.0"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT"
 authors = ["axp <344573222+versebound@users.noreply.github.com>"]
 
 [workspace.dependencies]
-starpak = { path = "crates/starpak", version = "0.1.0" }
+starpak = { path = "crates/starpak" }
 thiserror = "2"
 memmap2 = "0.9"
 zstd = "0.13"
