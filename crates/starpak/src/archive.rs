@@ -625,6 +625,8 @@ fn load_cd(file: &File, offset: u64, size: usize, use_mmap: bool) -> Result<CdBu
                 .map(file)
         };
         if let Ok(m) = map {
+            // madvise is Unix-only; Windows prefetches mapped views itself.
+            #[cfg(unix)]
             let _ = m.advise(memmap2::Advice::WillNeed);
             return Ok(CdBuf::Mmap(m));
         }
