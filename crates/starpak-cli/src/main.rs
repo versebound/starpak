@@ -1,5 +1,6 @@
 //! `starpak` command-line tool: inspect, extract and benchmark p4k archives.
 
+mod bench;
 mod util;
 
 use std::io::{self, BufWriter, Write};
@@ -88,6 +89,8 @@ enum Cmd {
         #[arg(short = 'j', long, default_value_t = default_threads())]
         jobs: usize,
     },
+    /// Measure open, listing, lookup and read performance.
+    Bench(bench::BenchArgs),
 }
 
 #[derive(Args)]
@@ -169,6 +172,7 @@ fn resolve(archive: &Archive, spec: &str) -> Result<Entry, AnyError> {
 
 fn run(cli: Cli) -> Result<(), AnyError> {
     match &cli.cmd {
+        Cmd::Bench(args) => bench::run(archive_path(&cli)?, !cli.no_mmap, args),
         Cmd::Info => cmd_info(&open(&cli)?),
         Cmd::Ls(args) => cmd_ls(&open(&cli)?, args),
         Cmd::Stat { entry } => cmd_stat(&open(&cli)?, entry),
