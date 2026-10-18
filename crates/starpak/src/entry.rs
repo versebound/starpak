@@ -231,6 +231,10 @@ impl<'a> EntryRef<'a> {
             .expect("entry id produced by the archive is valid")
     }
 
+    /// Reads the whole entry into memory, verifying its CRC.
+    pub fn read(&self) -> crate::Result<Vec<u8>> {
+        self.archive.read(self.id)
+    }
 }
 
 #[cfg(test)]

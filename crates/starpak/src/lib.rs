@@ -8,6 +8,10 @@
 //! let p4k = Archive::open("Data.p4k")?;
 //! println!("{} entries", p4k.len());
 //!
+//! // Case-insensitive lookup, either separator works.
+//! let ini = p4k.read_path("Data/Localization/english/global.ini")?;
+//! println!("{} bytes", ini.len());
+//!
 //! for e in p4k.glob("Data/Scripts/**/*.xml")? {
 //!     println!("{}", e.name());
 //! }
@@ -25,12 +29,14 @@ pub mod crypto;
 mod entry;
 mod error;
 pub mod format;
+mod reader;
 mod tree;
 mod util;
 
 pub use archive::{Archive, ArchiveInfo, GlobIter, Iter, OpenOptions};
 pub use entry::{DosDateTime, Entry, EntryId, EntryRef, Method};
 pub use error::{Error, Result};
+pub use reader::EntryReader;
 pub use tree::{DirId, DirTree};
 
 /// Library version.
