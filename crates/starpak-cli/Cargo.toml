@@ -1,0 +1,17 @@
+[package]
+name = "starpak-cli"
+description = "Command-line front end for the starpak library"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "starpak"
+path = "src/main.rs"
+
+[dependencies]
+starpak.workspace = true
+clap.workspace = true
+globset.workspace = true

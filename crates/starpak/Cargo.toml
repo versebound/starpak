@@ -1,0 +1,21 @@
+[package]
+name = "starpak"
+description = "Fast in-memory reader for Star Citizen Data.p4k archives, CryXmlB and DataForge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+memmap2.workspace = true
+zstd.workspace = true
+flate2.workspace = true
+aes.workspace = true
+cbc.workspace = true
+globset.workspace = true
+crc32c.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
