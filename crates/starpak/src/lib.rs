@@ -26,6 +26,7 @@
 
 mod archive;
 pub mod crypto;
+pub mod cryxml;
 mod entry;
 mod error;
 pub mod format;
