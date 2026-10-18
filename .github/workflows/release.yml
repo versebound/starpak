@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BIN: starpak
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --release
+
+  build:
+    needs: test
+    name: build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - name: win-x64
+            os: windows-2025
+            target: x86_64-pc-windows-msvc
+          - name: win-arm64
+            os: windows-2025
+            target: aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version from tag
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "STARPAK_VERSION=$VERSION" >> "$GITHUB_ENV"
+          # Only the [workspace.package] version starts a line with `version =`.
+          sed -i.bak "0,/^version = .*/s//version = \"$VERSION\"/" Cargo.toml && rm Cargo.toml.bak
+          grep -q "^version = \"$VERSION\"$" Cargo.toml
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        shell: bash
+        run: |
+          cargo update --workspace
+          cargo build --locked --release -p starpak-cli --target ${{ matrix.target }}
+
+      - name: Check version
+        if: matrix.name != 'win-arm64'
+        shell: bash
+        run: |
+          out="$(target/${{ matrix.target }}/release/$BIN --version)"
+          echo "$out"
+          [ "$out" = "$BIN $VERSION" ]
+
+      - name: Package
+        shell: bash
+        run: |
+          pkg="$BIN-$VERSION-${{ matrix.name }}"
+          mkdir "$pkg"
+          cp README.md LICENSE "$pkg/"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            cp "target/${{ matrix.target }}/release/$BIN.exe" "$pkg/"
+            7z a "$pkg.zip" "$pkg" > /dev/null
+            echo "ASSET=$pkg.zip" >> "$GITHUB_ENV"
+          else
+            cp "target/${{ matrix.target }}/release/$BIN" "$pkg/"
+            tar czf "$pkg.tar.gz" "$pkg"
+            echo "ASSET=$pkg.tar.gz" >> "$GITHUB_ENV"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "starpak $GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag
