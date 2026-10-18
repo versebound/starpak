@@ -4,6 +4,8 @@ Fast, allocation-light Rust library for reading Star Citizen's `Data.p4k` archiv
 
 The archive is ~160 GB with 1.37 million entries. Opening it reads only the trailing records and memory-maps the central directory; the index costs eight bytes per entry and names/metadata are decoded straight from the mapped bytes on demand. All reads use positional I/O, so one `Archive` handle can be shared across threads and read from concurrently with no locking.
 
+The byte-level format descriptions, design notes, CLI contract, test strategy and known gaps are in [SPEC.md](SPEC.md); this README is the overview.
+
 ## Workspace
 
 | Crate | Purpose |
