@@ -28,3 +28,11 @@ codegen-units = 4
 
 [profile.bench]
 debug = 1
+
+# Shipped binaries (make build-cli / dist, release workflow): no debug info.
+[profile.dist]
+inherits = "release"
+debug = 0
+strip = true
+lto = "fat"
+codegen-units = 1

@@ -73,13 +73,13 @@ jobs:
         shell: bash
         run: |
           cargo update --workspace
-          cargo build --locked --release -p starpak-cli --target ${{ matrix.target }}
+          cargo build --locked --profile dist -p starpak-cli --target ${{ matrix.target }}
 
       - name: Check version
         if: matrix.name != 'win-arm64'
         shell: bash
         run: |
-          out="$(target/${{ matrix.target }}/release/$BIN --version)"
+          out="$(target/${{ matrix.target }}/dist/$BIN --version)"
           echo "$out"
           [ "$out" = "$BIN $VERSION" ]
 
@@ -90,11 +90,11 @@ jobs:
           mkdir "$pkg"
           cp README.md LICENSE "$pkg/"
           if [[ "${{ matrix.target }}" == *windows* ]]; then
-            cp "target/${{ matrix.target }}/release/$BIN.exe" "$pkg/"
+            cp "target/${{ matrix.target }}/dist/$BIN.exe" "$pkg/"
             7z a "$pkg.zip" "$pkg" > /dev/null
             echo "ASSET=$pkg.zip" >> "$GITHUB_ENV"
           else
-            cp "target/${{ matrix.target }}/release/$BIN" "$pkg/"
+            cp "target/${{ matrix.target }}/dist/$BIN" "$pkg/"
             tar czf "$pkg.tar.gz" "$pkg"
             echo "ASSET=$pkg.tar.gz" >> "$GITHUB_ENV"
           fi
