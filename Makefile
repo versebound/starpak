@@ -1,4 +1,4 @@
-.PHONY: help bootstrap test test-real lint fmt check build run bench dist clean
+.PHONY: help bootstrap test test-real lint fmt check build build-cli run bench dist clean
 .DEFAULT_GOAL := help
 
 CARGO_TARGET_DIR ?= target
@@ -35,6 +35,11 @@ check: fmt lint test ## fmt + lint + test (what CI runs)
 build: ## Build release binary (bin path: $(CARGO_TARGET_DIR)/release/$(BIN))
 	STARPAK_VERSION=$(VERSION) cargo build --release -p starpak-cli
 
+build-cli: build ## Build the CLI and copy it to bin/$(BIN)
+	mkdir -p bin
+	cp $(CARGO_TARGET_DIR)/release/$(BIN) bin/$(BIN)
+	@echo bin/$(BIN)
+
 # make run ARGS="dcb records --path='*avenger*'"
 run: ## Run the CLI against STARPAK_P4K (ARGS="...")
 	STARPAK_VERSION=$(VERSION) cargo run --release -q -p starpak-cli -- $(ARGS)
@@ -55,6 +60,6 @@ dist: ## Build a release archive for this host into dist/ (TARGET=<triple>)
 	rm -rf dist/$(PKG)
 	@echo dist/$(PKG).tar.gz
 
-clean: ## Clean build artifacts (target/, dist/)
+clean: ## Clean build artifacts (target/, dist/, bin/)
 	cargo clean
-	rm -rf dist
+	rm -rf dist bin

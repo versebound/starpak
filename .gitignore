@@ -3,3 +3,4 @@
 *.profraw
 /dist
 /local.mk
+/bin
