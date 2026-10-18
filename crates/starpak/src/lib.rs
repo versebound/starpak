@@ -1,6 +1,8 @@
 //! # starpak
 //!
-//! Fast, allocation-light reader for Star Citizen `Data.p4k` archives.
+//! Fast, allocation-light reader for Star Citizen `Data.p4k` archives, plus
+//! decoders for CryEngine binary XML (`CryXmlB`) and the DataForge database
+//! (`Game2.dcb`).
 //!
 //! ```no_run
 //! use starpak::Archive;
@@ -27,6 +29,7 @@
 mod archive;
 pub mod crypto;
 pub mod cryxml;
+pub mod dataforge;
 mod entry;
 mod error;
 pub mod format;
