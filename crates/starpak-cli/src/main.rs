@@ -1,6 +1,7 @@
 //! `starpak` command-line tool: inspect, extract and benchmark p4k archives.
 
 mod bench;
+mod dcb;
 mod util;
 
 use std::io::{self, BufWriter, Write};
@@ -14,7 +15,7 @@ use starpak::{Archive, DirId, Entry, EntryId};
 
 #[derive(Parser)]
 #[command(name = "starpak", version, about = "Star Citizen Data.p4k reader")]
-struct Cli {
+pub(crate) struct Cli {
     /// Path to Data.p4k (or set STARPAK_P4K).
     #[arg(short = 'p', long = "p4k", global = true, env = "STARPAK_P4K")]
     p4k: Option<PathBuf>,
@@ -91,6 +92,8 @@ enum Cmd {
     },
     /// Measure open, listing, lookup and read performance.
     Bench(bench::BenchArgs),
+    /// DataForge (Game2.dcb) commands.
+    Dcb(dcb::DcbArgs),
 }
 
 #[derive(Args)]
@@ -114,7 +117,7 @@ pub(crate) fn default_threads() -> usize {
         .unwrap_or(4)
 }
 
-type AnyError = Box<dyn std::error::Error>;
+pub(crate) type AnyError = Box<dyn std::error::Error>;
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -154,7 +157,7 @@ fn archive_path(cli: &Cli) -> Result<&Path, AnyError> {
         .ok_or("no archive given: pass --p4k <PATH> or set STARPAK_P4K")?)
 }
 
-fn open(cli: &Cli) -> Result<Archive, AnyError> {
+pub(crate) fn open(cli: &Cli) -> Result<Archive, AnyError> {
     let opts = starpak::OpenOptions {
         mmap: !cli.no_mmap,
         ..Default::default()
@@ -173,6 +176,7 @@ fn resolve(archive: &Archive, spec: &str) -> Result<Entry, AnyError> {
 fn run(cli: Cli) -> Result<(), AnyError> {
     match &cli.cmd {
         Cmd::Bench(args) => bench::run(archive_path(&cli)?, !cli.no_mmap, args),
+        Cmd::Dcb(args) => dcb::run(&cli, args),
         Cmd::Info => cmd_info(&open(&cli)?),
         Cmd::Ls(args) => cmd_ls(&open(&cli)?, args),
         Cmd::Stat { entry } => cmd_stat(&open(&cli)?, entry),
